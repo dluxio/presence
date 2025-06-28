@@ -1,18 +1,28 @@
 services:
   # Coturn STUN/TURN server for WebRTC (disabled for troubleshooting)
-  # coturn:
-  #   image: coturn/coturn:latest
-  #   ports:
-  #     - "3478:3478/udp"     # STUN/TURN
-  #     - "3478:3478/tcp"     # STUN/TURN  
-  #     - "49152-65535:49152-65535/udp"  # RTP relay range
-  #   environment:
-  #     - TURN_SECRET=${TURN_SECRET:-default_turn_secret_change_me}
-  #   command: ["turnserver", "-c", "/etc/coturn/turnserver.conf", "-v"]
-  #   restart: always
-  #   volumes:
-  #     - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
-  #     - ./coturn/start-coturn.sh:/start-coturn.sh
+  coturn:
+    image: coturn/coturn:latest
+    ports:
+      # STUN/TURN
+      - "3478:3478"
+      - "3478:3478/udp"
+      # TLS-TURN
+      - "5349:5349"
+      - "5349:5349/udp"
+      # RTP/RTCP relays (adjust range if you need fewer ports)
+      - "49152-65535:49152-65535/udp"
+    environment:
+      # Auto-detect public IP so you don’t have to hard-code it
+      DETECT_EXTERNAL_IP: "yes"
+      # Secure long-term credentials (generate once; keep secret)
+      STATIC_AUTH_SECRET: ${TURN_SECRET:-default_turn_secret_change_me}
+    command: ["turnserver", "-c", "/etc/coturn/turnserver.conf", "-v"]
+    restart: always
+    volumes:
+      # Bind your custom conf + persistent database & logs
+      - "./turnserver.conf:/etc/coturn/turnserver.conf:ro"
+      - "coturn-data:/var/lib/coturn"
+      - "coturn-logs:/var/log"
 
   # Caddy reverse proxy with automatic HTTPS
   caddy:
@@ -152,6 +162,8 @@ volumes:
   caddy_config:
   postgres_data:
   redis_data:
+  coturn_data:
+  coturn_logs:
 
 networks:
   default:
