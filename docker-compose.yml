@@ -4,25 +4,17 @@ services:
   # Coturn STUN/TURN server for WebRTC
   coturn:
     image: coturn/coturn:latest
-    network_mode: host
+    ports:
+      - "3478:3478/udp"     # STUN/TURN
+      - "3478:3478/tcp"     # STUN/TURN  
+      - "49152-65535:49152-65535/udp"  # RTP relay range
     environment:
-      - TURN_SECRET=${TURN_SECRET}
-    command: >
-      -n --log-file=stdout
-      --lt-cred-mech
-      --use-auth-secret
-      --static-auth-secret=${TURN_SECRET}
-      --realm=presence.dlux.io
-      --listening-port=3478
-      --tls-listening-port=5349
-      --min-port=49152
-      --max-port=65535
-      --verbose
-      --fingerprint
-      --no-multicast-peers
+      - TURN_SECRET=${TURN_SECRET:-default_turn_secret_change_me}
+    command: ["/start-coturn.sh"]
     restart: always
     volumes:
       - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./coturn/start-coturn.sh:/start-coturn.sh:ro
 
   # Caddy reverse proxy with automatic HTTPS
   caddy:

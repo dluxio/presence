@@ -126,6 +126,38 @@ app.get('/api/test-connections', async (req, res) => {
   res.status(allConnected ? 200 : 500).json(results);
 });
 
+// TURN server configuration endpoint for WebRTC clients
+app.get('/api/webrtc/turn-config', authenticateOptional, (req, res) => {
+  try {
+    const turnConfig = generateTurnCredentials(req.user?.account);
+    
+    res.json({
+      iceServers: [
+        {
+          urls: [
+            'stun:presence.dlux.io:3478',
+            'turn:presence.dlux.io:3478?transport=udp',
+            'turn:presence.dlux.io:3478?transport=tcp'
+          ],
+          username: turnConfig.username,
+          credential: turnConfig.password
+        }
+      ],
+      iceTransportPolicy: 'all',
+      iceCandidatePoolSize: 10
+    });
+    
+  } catch (error) {
+    console.error('Error generating TURN config:', error);
+    res.status(500).json({ error: 'Failed to generate TURN configuration' });
+  }
+});
+
+// Serve TURN test page
+app.get('/test-turn', (req, res) => {
+  res.sendFile(__dirname + '/../test-turn.html');
+});
+
 // ==================================================================
 // VR SPACE MANAGEMENT
 // ==================================================================
