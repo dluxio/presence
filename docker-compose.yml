@@ -1,18 +1,18 @@
 services:
-  # Coturn STUN/TURN server for WebRTC
-  coturn:
-    image: coturn/coturn:latest
-    ports:
-      - "3478:3478/udp"     # STUN/TURN
-      - "3478:3478/tcp"     # STUN/TURN  
-      - "49152-65535:49152-65535/udp"  # RTP relay range
-    environment:
-      - TURN_SECRET=${TURN_SECRET:-default_turn_secret_change_me}
-    command: ["turnserver", "-c", "/etc/coturn/turnserver.conf", "-v"]
-    restart: always
-    volumes:
-      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
-      - ./coturn/start-coturn.sh:/start-coturn.sh
+  # Coturn STUN/TURN server for WebRTC (disabled for troubleshooting)
+  # coturn:
+  #   image: coturn/coturn:latest
+  #   ports:
+  #     - "3478:3478/udp"     # STUN/TURN
+  #     - "3478:3478/tcp"     # STUN/TURN  
+  #     - "49152-65535:49152-65535/udp"  # RTP relay range
+  #   environment:
+  #     - TURN_SECRET=${TURN_SECRET:-default_turn_secret_change_me}
+  #   command: ["turnserver", "-c", "/etc/coturn/turnserver.conf", "-v"]
+  #   restart: always
+  #   volumes:
+  #     - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+  #     - ./coturn/start-coturn.sh:/start-coturn.sh
 
   # Caddy reverse proxy with automatic HTTPS
   caddy:
