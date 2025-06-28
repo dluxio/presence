@@ -23,7 +23,7 @@ const primaryPool = new Pool({
   database: process.env.DB_PRIMARY_NAME || 'postgres',
   user: process.env.DB_PRIMARY_USER,
   password: process.env.DB_PRIMARY_PASSWORD,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  ssl: false // Disable SSL for data.dlux.io as it doesn't support SSL connections
 });
 
 const replicaPool = new Pool({
@@ -37,9 +37,19 @@ const replicaPool = new Pool({
 
 // Redis connection
 const redis = Redis.createClient({
-  host: process.env.REDIS_HOST || 'redis',
-  port: process.env.REDIS_PORT || 6379
+  url: `redis://${process.env.REDIS_HOST || 'redis'}:${process.env.REDIS_PORT || 6379}`,
+  socket: {
+    reconnectStrategy: (retries) => Math.min(retries * 50, 500)
+  }
 });
+
+// Handle Redis connection events
+redis.on('error', (err) => console.error('Redis Client Error:', err));
+redis.on('connect', () => console.log('Redis Client Connected'));
+redis.on('ready', () => console.log('Redis Client Ready'));
+
+// Connect to Redis
+redis.connect().catch(console.error);
 
 // Middleware
 app.use(cors({
@@ -74,6 +84,46 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     version: '2.0.0'
   });
+});
+
+// Database and Redis connection test endpoint
+app.get('/api/test-connections', async (req, res) => {
+  const results = {
+    timestamp: new Date().toISOString(),
+    primary_db: { status: 'error', error: 'Not tested' },
+    replica_db: { status: 'error', error: 'Not tested' },
+    redis: { status: 'error', error: 'Not tested' }
+  };
+
+  // Test Primary Database
+  try {
+    await primaryPool.query('SELECT 1');
+    results.primary_db = { status: 'connected', timestamp: new Date().toISOString() };
+  } catch (error) {
+    results.primary_db = { status: 'error', error: error.message };
+  }
+
+  // Test Replica Database
+  try {
+    await replicaPool.query('SELECT 1');
+    results.replica_db = { status: 'connected', timestamp: new Date().toISOString() };
+  } catch (error) {
+    results.replica_db = { status: 'error', error: error.message };
+  }
+
+  // Test Redis
+  try {
+    await redis.ping();
+    results.redis = { status: 'connected', timestamp: new Date().toISOString() };
+  } catch (error) {
+    results.redis = { status: 'error', error: error.message };
+  }
+
+  const allConnected = results.primary_db.status === 'connected' && 
+                       results.replica_db.status === 'connected' && 
+                       results.redis.status === 'connected';
+
+  res.status(allConnected ? 200 : 500).json(results);
 });
 
 // ==================================================================

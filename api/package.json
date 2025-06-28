@@ -1,6 +1,6 @@
 {
   "name": "dlux-presence-enhanced",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "description": "Enhanced DLUX Presence Infrastructure - VR and Real-Time Communication",
   "main": "index.js",
   "scripts": {

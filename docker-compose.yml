@@ -43,7 +43,7 @@ services:
     image: postgres:14-alpine
     environment:
       - POSTGRES_USER=replica_user
-      - POSTGRES_PASSWORD=${DB_REPLICA_PASSWORD}
+      - POSTGRES_PASSWORD=${DB_REPLICA_PASSWORD:-replica_password_2024}
       - POSTGRES_DB=dlux_presence
       - PGUSER=replica_user
     volumes:
@@ -93,19 +93,19 @@ services:
       - DB_PRIMARY_HOST=data.dlux.io
       - DB_PRIMARY_PORT=5432
       - DB_PRIMARY_NAME=postgres
-      - DB_PRIMARY_USER=${DB_PRIMARY_USER}
-      - DB_PRIMARY_PASSWORD=${DB_PRIMARY_PASSWORD}
+      - DB_PRIMARY_USER=${DB_PRIMARY_USER:-your_primary_db_user}
+      - DB_PRIMARY_PASSWORD=${DB_PRIMARY_PASSWORD:-your_primary_db_password}
       # Local replica for reads
       - DB_REPLICA_HOST=db_replica
       - DB_REPLICA_PORT=5432
       - DB_REPLICA_NAME=dlux_presence
       - DB_REPLICA_USER=replica_user
-      - DB_REPLICA_PASSWORD=${DB_REPLICA_PASSWORD}
+      - DB_REPLICA_PASSWORD=${DB_REPLICA_PASSWORD:-replica_password_2024}
       # Redis for caching
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       # TURN server configuration
-      - TURN_SECRET=${TURN_SECRET}
+      - TURN_SECRET=${TURN_SECRET:-default_turn_secret}
       # Hive blockchain node
       - HIVE_NODE=https://api.hive.blog
       # DLUX API for data sync
@@ -136,13 +136,13 @@ services:
       - DB_PRIMARY_HOST=data.dlux.io
       - DB_PRIMARY_PORT=5432
       - DB_PRIMARY_NAME=postgres
-      - DB_PRIMARY_USER=${DB_PRIMARY_USER}
-      - DB_PRIMARY_PASSWORD=${DB_PRIMARY_PASSWORD}
+      - DB_PRIMARY_USER=${DB_PRIMARY_USER:-your_primary_db_user}
+      - DB_PRIMARY_PASSWORD=${DB_PRIMARY_PASSWORD:-your_primary_db_password}
       - DB_REPLICA_HOST=db_replica
       - DB_REPLICA_PORT=5432
       - DB_REPLICA_NAME=dlux_presence
       - DB_REPLICA_USER=replica_user
-      - DB_REPLICA_PASSWORD=${DB_REPLICA_PASSWORD}
+      - DB_REPLICA_PASSWORD=${DB_REPLICA_PASSWORD:-replica_password_2024}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - DLUX_API_URL=https://data.dlux.io

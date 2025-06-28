@@ -13,7 +13,7 @@ RUN mkdir -p logs
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production && npm cache clean --force
+RUN npm install
 
 # Copy application code
 COPY . .

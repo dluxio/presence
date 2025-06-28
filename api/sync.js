@@ -9,7 +9,7 @@ const primaryPool = new Pool({
   database: process.env.DB_PRIMARY_NAME || 'postgres',
   user: process.env.DB_PRIMARY_USER,
   password: process.env.DB_PRIMARY_PASSWORD,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  ssl: false // Disable SSL for data.dlux.io as it doesn't support SSL connections
 });
 
 const replicaPool = new Pool({
@@ -22,9 +22,19 @@ const replicaPool = new Pool({
 });
 
 const redis = Redis.createClient({
-  host: process.env.REDIS_HOST || 'redis',
-  port: process.env.REDIS_PORT || 6379
+  url: `redis://${process.env.REDIS_HOST || 'redis'}:${process.env.REDIS_PORT || 6379}`,
+  socket: {
+    reconnectStrategy: (retries) => Math.min(retries * 50, 500)
+  }
 });
+
+// Handle Redis connection events
+redis.on('error', (err) => console.error('Redis Client Error:', err));
+redis.on('connect', () => console.log('Redis Client Connected'));
+redis.on('ready', () => console.log('Redis Client Ready'));
+
+// Connect to Redis
+redis.connect().catch(console.error);
 
 const DLUX_API_URL = process.env.DLUX_API_URL || 'https://data.dlux.io';
 
