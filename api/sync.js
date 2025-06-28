@@ -414,6 +414,11 @@ async function runCleanupCycle() {
 // STARTUP AND SCHEDULING
 // ==================================================================
 
+// Store interval references for cleanup
+let syncInterval;
+let cleanupInterval;
+let isShuttingDown = false;
+
 async function startup() {
   console.log('DLUX Presence Sync Service initializing...');
   
@@ -440,39 +445,103 @@ async function startup() {
   // Initial sync
   await runSyncCycle();
   
-  // Schedule regular syncing
-  setInterval(runSyncCycle, 60000); // Every minute
-  setInterval(runCleanupCycle, 3600000); // Every hour
+  // Schedule regular syncing - store references for cleanup
+  syncInterval = setInterval(() => {
+    if (!isShuttingDown) {
+      runSyncCycle().catch(console.error);
+    }
+  }, 60000); // Every minute
+  
+  cleanupInterval = setInterval(() => {
+    if (!isShuttingDown) {
+      runCleanupCycle().catch(console.error);
+    }
+  }, 3600000); // Every hour
   
   console.log('DLUX Presence Sync Service running');
   console.log('- Sync cycle: every 60 seconds');
   console.log('- Cleanup cycle: every hour');
 }
 
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) {
+    console.log('Shutdown already in progress...');
+    return;
+  }
+  
+  isShuttingDown = true;
+  console.log(`${signal} received, shutting down gracefully...`);
+  
+  // Set a timeout to force exit if shutdown takes too long
+  const forceExitTimeout = setTimeout(() => {
+    console.error('Forced shutdown after 10 seconds');
+    process.exit(1);
+  }, 10000);
+  
+  try {
+    // Clear intervals first
+    if (syncInterval) {
+      clearInterval(syncInterval);
+      console.log('Sync interval cleared');
+    }
+    
+    if (cleanupInterval) {
+      clearInterval(cleanupInterval);
+      console.log('Cleanup interval cleared');
+    }
+    
+    // Close database connections
+    try {
+      await primaryPool.end();
+      console.log('Primary database connection closed');
+    } catch (error) {
+      console.error('Error closing primary database:', error.message);
+    }
+    
+    try {
+      await replicaPool.end();
+      console.log('Replica database connection closed');
+    } catch (error) {
+      console.error('Error closing replica database:', error.message);
+    }
+    
+    // Close Redis connection
+    try {
+      if (redis && typeof redis.quit === 'function') {
+        await redis.quit();
+        console.log('Redis connection closed');
+      }
+    } catch (error) {
+      console.error('Error closing Redis connection:', error.message);
+    }
+    
+    clearTimeout(forceExitTimeout);
+    console.log('Graceful shutdown completed');
+    process.exit(0);
+    
+  } catch (error) {
+    console.error('Error during graceful shutdown:', error);
+    clearTimeout(forceExitTimeout);
+    process.exit(1);
+  }
+}
+
 // Error handling
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
+  if (!isShuttingDown) {
+    gracefulShutdown('UNCAUGHT_EXCEPTION').catch(() => process.exit(1));
+  }
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  await primaryPool.end();
-  await replicaPool.end();
-  await redis.quit();
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  console.log('SIGINT received, shutting down gracefully');
-  await primaryPool.end();
-  await replicaPool.end();
-  await redis.quit();
-  process.exit(0);
-});
+// Graceful shutdown signal handlers
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2')); // For nodemon compatibility
 
 // Start the service
 startup().catch(console.error); 

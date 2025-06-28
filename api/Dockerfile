@@ -29,10 +29,10 @@ USER dlux
 # Expose port
 EXPOSE 3000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Health check with shorter timeout to avoid interfering with shutdown
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=2 \
   CMD node -e "const http = require('http'); \
-    const options = { host: 'localhost', port: 3000, path: '/health', timeout: 2000 }; \
+    const options = { host: 'localhost', port: 3000, path: '/health', timeout: 3000 }; \
     const req = http.request(options, (res) => { \
       if (res.statusCode === 200) process.exit(0); \
       else process.exit(1); \
@@ -41,5 +41,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     req.on('timeout', () => process.exit(1)); \
     req.end();"
 
-# Start the application
-CMD ["npm", "start"] 
+# Start the application with proper signal handling
+CMD ["node", "index.js"] 

@@ -78,6 +78,8 @@ services:
     build: 
       context: ./api
       dockerfile: Dockerfile
+    stop_signal: SIGTERM
+    stop_grace_period: 15s
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -122,6 +124,8 @@ services:
       context: ./api
       dockerfile: Dockerfile
     command: node sync.js
+    stop_signal: SIGTERM
+    stop_grace_period: 15s
     environment:
       - NODE_ENV=production
       # Same environment as API

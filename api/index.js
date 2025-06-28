@@ -870,6 +870,8 @@ async function cleanupSession(socketId) {
 
 // Start server
 const PORT = process.env.PORT || 3000;
+let isShuttingDown = false;
+
 server.listen(PORT, () => {
   console.log(`DLUX Presence Enhanced API running on port ${PORT}`);
   console.log(`Primary DB: ${process.env.DB_PRIMARY_HOST || 'data.dlux.io'}`);
@@ -877,25 +879,91 @@ server.listen(PORT, () => {
   console.log(`Redis: ${process.env.REDIS_HOST || 'redis'}`);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  server.close(async () => {
-    await primaryPool.end();
-    await replicaPool.end();
-    await redis.quit();
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) {
+    console.log('Shutdown already in progress...');
+    return;
+  }
+  
+  isShuttingDown = true;
+  console.log(`${signal} received, shutting down gracefully...`);
+  
+  // Set a timeout to force exit if shutdown takes too long
+  const forceExitTimeout = setTimeout(() => {
+    console.error('Forced shutdown after 10 seconds');
+    process.exit(1);
+  }, 10000);
+  
+  try {
+    // Close HTTP server first
+    await new Promise((resolve, reject) => {
+      server.close((err) => {
+        if (err) {
+          console.error('Error closing HTTP server:', err);
+          reject(err);
+        } else {
+          console.log('HTTP server closed');
+          resolve();
+        }
+      });
+    });
+    
+    // Close Socket.IO
+    io.close(() => {
+      console.log('Socket.IO server closed');
+    });
+    
+    // Close database connections
+    try {
+      await primaryPool.end();
+      console.log('Primary database connection closed');
+    } catch (error) {
+      console.error('Error closing primary database:', error.message);
+    }
+    
+    try {
+      await replicaPool.end();
+      console.log('Replica database connection closed');
+    } catch (error) {
+      console.error('Error closing replica database:', error.message);
+    }
+    
+    // Close Redis connection
+    try {
+      if (redis && typeof redis.quit === 'function') {
+        await redis.quit();
+        console.log('Redis connection closed');
+      }
+    } catch (error) {
+      console.error('Error closing Redis connection:', error.message);
+    }
+    
+    clearTimeout(forceExitTimeout);
+    console.log('Graceful shutdown completed');
     process.exit(0);
-  });
+    
+  } catch (error) {
+    console.error('Error during graceful shutdown:', error);
+    clearTimeout(forceExitTimeout);
+    process.exit(1);
+  }
+}
+
+// Graceful shutdown signal handlers
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2')); // For nodemon compatibility
+
+// Error handling
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  if (!isShuttingDown) {
+    gracefulShutdown('UNCAUGHT_EXCEPTION').catch(() => process.exit(1));
+  }
 });
 
-process.on('SIGINT', async () => {
-  console.log('SIGINT received, shutting down gracefully');
-  server.close(async () => {
-    await primaryPool.end();
-    await replicaPool.end();
-    await redis.quit();
-    process.exit(0);
-  });
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 module.exports = { app, server, io }; 
