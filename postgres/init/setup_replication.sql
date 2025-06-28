@@ -29,10 +29,8 @@ GRANT CONNECT ON DATABASE webrtc_db TO replica_user;
 -- DLUX Presence Database Setup
 -- This sets up a local read replica with presence-specific enhancements
 
--- Create database
-CREATE DATABASE dlux_presence;
-
--- Connect to the new database
+-- Database is created by docker-compose.yml via POSTGRES_DB environment variable
+-- Connect to the database
 \c dlux_presence;
 
 -- Create replica user
