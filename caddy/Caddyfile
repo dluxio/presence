@@ -1,0 +1,60 @@
+presence.dlux.io {
+	# Automatic HTTPS with Let's Encrypt
+	
+	# API routes
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+	
+	# Socket.IO WebSocket connections
+	handle /socket.io/* {
+		reverse_proxy api:3000 {
+			header_up Connection {http.request.header.connection}
+			header_up Upgrade {http.request.header.upgrade}
+		}
+	}
+	
+	# Health check
+	handle /health {
+		reverse_proxy api:3000
+	}
+	
+	# Chat API for real-time messaging
+	handle /chat/* {
+		reverse_proxy api:3000
+	}
+	
+	# VR room management
+	handle /rooms/* {
+		reverse_proxy api:3000
+	}
+	
+	# All other requests redirect to main DLUX interface
+	handle {
+		redir https://dlux.io/presence{uri} permanent
+	}
+	
+	# Logging
+	log {
+		output file /var/log/caddy/presence.log
+		format json
+	}
+}
+
+# Development/local setup
+localhost:8080 {
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+	
+	handle /socket.io/* {
+		reverse_proxy api:3000 {
+			header_up Connection {http.request.header.connection}
+			header_up Upgrade {http.request.header.upgrade}
+		}
+	}
+	
+	handle {
+		respond "DLUX Presence Development Server" 200
+	}
+} 

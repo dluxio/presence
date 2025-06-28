@@ -1,0 +1,44 @@
+{
+  "name": "dlux-presence-enhanced",
+  "version": "2.0.0",
+  "description": "Enhanced DLUX Presence Infrastructure - VR and Real-Time Communication",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "sync": "node sync.js",
+    "dev": "nodemon index.js",
+    "test": "jest",
+    "lint": "eslint .",
+    "logs": "tail -f logs/combined.log"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.4",
+    "pg": "^8.11.3",
+    "redis": "^4.6.7",
+    "cors": "^2.8.5",
+    "node-fetch": "^2.6.7",
+    "crypto": "^1.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "jest": "^29.6.2",
+    "eslint": "^8.45.0"
+  },
+  "keywords": [
+    "dlux",
+    "presence",
+    "vr",
+    "webrtc",
+    "socketio",
+    "chat",
+    "collaboration",
+    "hive",
+    "blockchain"
+  ],
+  "author": "DLUX Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  }
+} 

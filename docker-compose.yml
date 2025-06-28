@@ -1,0 +1,164 @@
+version: '3.8'
+
+services:
+  # Coturn STUN/TURN server for WebRTC
+  coturn:
+    image: coturn/coturn:latest
+    network_mode: host
+    environment:
+      - TURN_SECRET=${TURN_SECRET}
+    command: >
+      -n --log-file=stdout
+      --lt-cred-mech
+      --use-auth-secret
+      --static-auth-secret=${TURN_SECRET}
+      --realm=presence.dlux.io
+      --listening-port=3478
+      --tls-listening-port=5349
+      --min-port=49152
+      --max-port=65535
+      --verbose
+      --fingerprint
+      --no-multicast-peers
+    restart: always
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+
+  # Caddy reverse proxy with automatic HTTPS
+  caddy:
+    image: caddy:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: always
+    depends_on:
+      - api
+
+  # Local PostgreSQL read replica from data.dlux.io
+  db_replica:
+    image: postgres:14-alpine
+    environment:
+      - POSTGRES_USER=replica_user
+      - POSTGRES_PASSWORD=${DB_REPLICA_PASSWORD}
+      - POSTGRES_DB=dlux_presence
+      - PGUSER=replica_user
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5433:5432"
+    command: >
+      postgres
+      -c wal_level=replica
+      -c hot_standby=on
+      -c max_wal_senders=3
+      -c max_replication_slots=3
+      -c hot_standby_feedback=on
+      -c log_min_messages=info
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U replica_user -d dlux_presence"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for caching and real-time features
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Enhanced Presence API server
+  api:
+    build: 
+      context: ./api
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # Primary database (data.dlux.io) for writes
+      - DB_PRIMARY_HOST=data.dlux.io
+      - DB_PRIMARY_PORT=5432
+      - DB_PRIMARY_NAME=postgres
+      - DB_PRIMARY_USER=${DB_PRIMARY_USER}
+      - DB_PRIMARY_PASSWORD=${DB_PRIMARY_PASSWORD}
+      # Local replica for reads
+      - DB_REPLICA_HOST=db_replica
+      - DB_REPLICA_PORT=5432
+      - DB_REPLICA_NAME=dlux_presence
+      - DB_REPLICA_USER=replica_user
+      - DB_REPLICA_PASSWORD=${DB_REPLICA_PASSWORD}
+      # Redis for caching
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # TURN server configuration
+      - TURN_SECRET=${TURN_SECRET}
+      # Hive blockchain node
+      - HIVE_NODE=https://api.hive.blog
+      # DLUX API for data sync
+      - DLUX_API_URL=https://data.dlux.io
+    ports:
+      - "3000:3000"
+    restart: always
+    depends_on:
+      - db_replica
+      - redis
+    volumes:
+      - ./api/logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Background sync service
+  sync:
+    build: 
+      context: ./api
+      dockerfile: Dockerfile
+    command: node sync.js
+    environment:
+      - NODE_ENV=production
+      # Same environment as API
+      - DB_PRIMARY_HOST=data.dlux.io
+      - DB_PRIMARY_PORT=5432
+      - DB_PRIMARY_NAME=postgres
+      - DB_PRIMARY_USER=${DB_PRIMARY_USER}
+      - DB_PRIMARY_PASSWORD=${DB_PRIMARY_PASSWORD}
+      - DB_REPLICA_HOST=db_replica
+      - DB_REPLICA_PORT=5432
+      - DB_REPLICA_NAME=dlux_presence
+      - DB_REPLICA_USER=replica_user
+      - DB_REPLICA_PASSWORD=${DB_REPLICA_PASSWORD}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DLUX_API_URL=https://data.dlux.io
+    restart: always
+    depends_on:
+      - db_replica
+      - redis
+    volumes:
+      - ./api/logs:/app/logs
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    driver: bridge
