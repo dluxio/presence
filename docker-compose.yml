@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Coturn STUN/TURN server for WebRTC
   coturn:
@@ -10,11 +8,11 @@ services:
       - "49152-65535:49152-65535/udp"  # RTP relay range
     environment:
       - TURN_SECRET=${TURN_SECRET:-default_turn_secret_change_me}
-    command: ["/start-coturn.sh"]
+    command: ["/bin/sh", "-c", "chmod +x /start-coturn.sh && /start-coturn.sh"]
     restart: always
     volumes:
       - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
-      - ./coturn/start-coturn.sh:/start-coturn.sh:ro
+      - ./coturn/start-coturn.sh:/start-coturn.sh
 
   # Caddy reverse proxy with automatic HTTPS
   caddy:
