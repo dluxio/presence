@@ -8,7 +8,7 @@ services:
       - "49152-65535:49152-65535/udp"  # RTP relay range
     environment:
       - TURN_SECRET=${TURN_SECRET:-default_turn_secret_change_me}
-    command: ["/bin/sh", "-c", "chmod +x /start-coturn.sh && /start-coturn.sh"]
+    command: ["turnserver", "-c", "/etc/coturn/turnserver.conf", "-v"]
     restart: always
     volumes:
       - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
