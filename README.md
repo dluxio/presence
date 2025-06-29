@@ -460,6 +460,351 @@ docker-compose logs api | grep Socket
 - **NFT Galleries**: 3D NFT visualization
 - **Virtual Events**: Conferences and meetups
 
+## 🔊 **NEW: VR Audio Environment & Social Monetization System**
+
+### Overview
+The enhanced DLUX Presence system now includes a sophisticated audio environment control and payment system that manages the social dynamics of VR spaces:
+
+- **Four Audio Modes**: Complete control over how users hear each other in VR
+- **Spatial Audio Intelligence**: AI-assisted social connection algorithms  
+- **Payment Integration**: Subscription-based access and profit sharing
+- **Ticketing System**: Pay-per-access Q&A participation
+- **Permission-based Access**: Multiple layers of access control
+
+### 🎤 Four Audio Environment Modes
+
+#### **Mode 1: Announcement Mode**
+- **Only the designated speaker is heard by everyone** (like a lecture)
+- All other user-to-user audio is muted
+- Perfect for presentations, announcements, keynotes
+
+#### **Mode 2: Stage Mode** 
+- **Everyone hears the speaker at full volume**
+- **Plus spatial audio from people nearby in VR**
+- Like a conference with side conversations during the talk
+- Best of both worlds: main content + social interaction
+
+#### **Mode 3: Ambient Mode**
+- **Pure spatial audio** - only hear people near your VR avatar
+- "Microphone" is turned off - no broadcast speaker
+- Like a cocktail party or networking event
+
+#### **Mode 4: Super Ambient Mode**
+- **AI ensures everyone has 1-2 conversation partners**
+- Regardless of actual VR distance
+- Anti-isolation algorithm for social comfort
+- Perfect for shy users or sparse events
+
+#### **Admin Controls**
+```javascript
+// Change audio mode for a space (admin only)
+const response = await fetch(`/api/spaces/post/author%2Fpermlink/audio/mode`, {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${hiveSignature}` },
+  body: JSON.stringify({
+    audio_mode: 'stage', // announcement, stage, ambient, superambient
+    spatial_audio_range_meters: 5.0,
+    superambient_neighbor_count: 2,
+    current_speaker: 'dlux_user' // for announcement/stage modes
+  })
+});
+```
+
+#### **Speaker Role Management**
+```javascript
+// Request to become the speaker (announcement/stage modes)
+const response = await fetch(`/api/spaces/post/author%2Fpermlink/audio/speaker/request`, {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${hiveSignature}` }
+});
+
+// Pass speaker role to another user (like a talk show host)
+await fetch(`/api/spaces/post/author%2Fpermlink/audio/speaker/pass`, {
+  method: 'POST',
+  body: JSON.stringify({ target_user: 'dlux_user2' })
+});
+
+// Release speaker role when done
+await fetch(`/api/spaces/post/author%2Fpermlink/audio/speaker/release`, { 
+  method: 'POST' 
+});
+```
+
+#### **Spatial Audio Management**
+```javascript
+// Get current spatial connections (who can hear whom)
+const connections = await fetch(`/api/spaces/post/author%2Fpermlink/audio/connections`);
+
+// Calculate new spatial connections based on user positions
+await fetch(`/api/spaces/post/author%2Fpermlink/audio/calculate-connections`, {
+  method: 'POST',
+  body: JSON.stringify({
+    user_positions: [
+      { user_account: 'user1', position: { x: 0, y: 0, z: 0 } },
+      { user_account: 'user2', position: { x: 3, y: 0, z: 2 } }
+    ]
+  })
+});
+```
+
+#### **Real-Time Events**
+```javascript
+// Listen for audio environment changes
+socket.on('audio-mode-changed', (data) => {
+  console.log(`Audio mode changed to ${data.audio_mode} by ${data.changed_by}`);
+  // Update audio system based on new mode
+  // Reconfigure WebRTC connections
+});
+
+socket.on('speaker-role-granted', (data) => {
+  console.log(`${data.speaker} is now the main speaker`);
+  // Set up broadcast audio for speaker
+});
+
+socket.on('speaker-role-passed', (data) => {
+  console.log(`Speaker role passed from ${data.from_user} to ${data.to_user}`);
+  // Update speaker audio routing
+});
+
+socket.on('spatial-connections-updated', (data) => {
+  console.log(`Spatial audio updated: ${data.connections.length} connections`);
+  // Update WebRTC peer connections based on spatial relationships
+});
+```
+
+### 💰 Payment & Subscription System
+
+#### **Subscription Tiers**
+- **Pro Monthly**: Access to microphone features and priority support
+- **Mic Credits**: Pay-per-use microphone access
+- **Space Premium**: Enhanced features for space owners
+
+#### **Purchase API**
+```javascript
+// Buy a monthly subscription
+const response = await fetch('/api/payments/purchase', {
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${hiveSignature}` },
+  body: JSON.stringify({
+    purchase_type: 'subscription',
+    amount: 10.0,
+    currency: 'DLUX',
+    payment_method: 'dlux_token'
+  })
+});
+
+// Buy Q&A access ticket for specific space
+const response = await fetch('/api/payments/purchase', {
+  method: 'POST',
+  body: JSON.stringify({
+    purchase_type: 'ticket_purchase',
+    space_type: 'post',
+    space_id: 'author/permlink',
+    ticket_type: 'qna_access',
+    amount: 5.0
+  })
+});
+```
+
+#### **Profit Sharing Configuration**
+Space owners can configure profit sharing:
+```sql
+INSERT INTO profit_sharing_config 
+(space_type, space_id, space_owner, platform_fee_percent, creator_share_percent)
+VALUES ('post', 'author/permlink', 'author', 10.00, 85.00);
+```
+
+### 🎫 Access Control & Ticketing
+
+#### **Permission Levels**
+1. **Admin**: Space author/creator - can purchase microphones, full control
+2. **Moderator**: Community members - can use microphones with restrictions
+3. **Subscriber**: Paid users - microphone access with time limits
+4. **Ticket Holder**: Per-space paid access - Q&A participation only
+5. **Guest**: Free users - listen only
+
+#### **Q&A Participation**
+Only users with valid tickets can participate in Q&A sessions:
+```javascript
+// Check if user can participate in Q&A
+const hasTicket = await checkMicrophonePermission(spaceType, spaceId, userAccount);
+
+if (hasTicket) {
+  // Allow Q&A participation
+  // Show "Request Mic" button
+} else {
+  // Show "Buy Q&A Access" button
+  // Display pricing information
+}
+```
+
+### 📊 **Database Schema**
+
+#### **New Tables Added**
+- `space_microphones` - Virtual microphone configurations
+- `microphone_usage` - Usage analytics and billing data
+- `user_subscriptions` - Subscription management
+- `payment_transactions` - Payment tracking and profit sharing
+- `space_tickets` - Per-space access tickets
+- `space_permissions` - Enhanced permission system
+- `profit_sharing_config` - Revenue sharing settings
+
+### 🔧 **Integration Examples**
+
+#### **Frontend VR Client**
+```javascript
+class MicrophoneSystem {
+  constructor(socket, spaceId) {
+    this.socket = socket;
+    this.spaceId = spaceId;
+    this.currentMicrophone = null;
+    this.setupEventListeners();
+  }
+
+  setupEventListeners() {
+    // Listen for microphone state changes
+    this.socket.on('microphone-taken', (data) => {
+      if (data.broadcast_mode === 'full_volume') {
+        this.enableFullVolumeReceive(data.holder);
+      }
+      this.updateSpeakerVisual(data.holder, true);
+    });
+
+    this.socket.on('microphone-released', () => {
+      this.disableFullVolumeReceive();
+      this.updateSpeakerVisual(null, false);
+    });
+  }
+
+  async requestMicrophone(microphoneId) {
+    const response = await fetch(`/api/microphones/${microphoneId}/request`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${this.authToken}` }
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      this.currentMicrophone = data.microphone;
+      this.startBroadcasting(data.microphone.broadcast_mode);
+    }
+  }
+
+  startBroadcasting(mode) {
+    if (mode === 'full_volume' || mode === 'mixed') {
+      // Set up WebRTC broadcast to all users
+      this.setupBroadcastConnection();
+    }
+    
+    if (mode === 'spatial_only' || mode === 'mixed') {
+      // Maintain spatial audio for nearby VR users
+      this.maintainSpatialAudio();
+    }
+  }
+}
+```
+
+#### **Payment Integration**
+```javascript
+class PaymentSystem {
+  async purchaseQAAccess(spaceType, spaceId) {
+    const transaction = await fetch('/api/payments/purchase', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${this.authToken}` },
+      body: JSON.stringify({
+        purchase_type: 'ticket_purchase',
+        space_type: spaceType,
+        space_id: spaceId,
+        ticket_type: 'qna_access',
+        amount: 5.0,
+        payment_method: 'dlux_token'
+      })
+    });
+
+    if (transaction.confirmation_required) {
+      // Handle external payment confirmation
+      await this.monitorPaymentChannel(transaction.payment_channel_id);
+    }
+
+    return transaction;
+  }
+
+  async monitorPaymentChannel(channelId) {
+    // Monitor blockchain or payment processor for confirmation
+    // This would integrate with Hive, Lightning Network, etc.
+  }
+}
+```
+
+### 🚀 **Deployment Configuration**
+
+#### **Environment Variables**
+```bash
+# Add to .env file
+SYSTEM_ADMINS=admin1,admin2,admin3  # Users who can admin global spaces
+TURN_SECRET=your_secure_turn_secret  # For WebRTC authentication
+
+# Payment integration (examples)
+HIVE_ACCOUNT=your_hive_account
+LIGHTNING_NODE_URL=your_lightning_node
+DLUX_TOKEN_CONTRACT=dlux_token_contract_address
+```
+
+#### **Redis Configuration**
+The system uses Redis for:
+- Microphone queues (`mic_queue:{microphoneId}`)
+- Payment channel monitoring
+- Session caching
+- Real-time activity tracking
+
+### 📈 **Analytics & Monitoring**
+
+#### **Usage Analytics**
+```sql
+-- Get microphone usage statistics
+SELECT 
+  m.microphone_name,
+  COUNT(u.id) as total_sessions,
+  AVG(u.duration_seconds) as avg_duration,
+  SUM(u.duration_seconds) as total_duration
+FROM space_microphones m
+LEFT JOIN microphone_usage u ON m.id = u.microphone_id
+WHERE m.space_type = 'post' AND m.space_id = 'author/permlink'
+GROUP BY m.id, m.microphone_name;
+```
+
+#### **Revenue Analytics**
+```sql
+-- Get space revenue and profit sharing
+SELECT 
+  space_type,
+  space_id,
+  space_owner,
+  SUM(amount) as total_revenue,
+  SUM(platform_fee) as platform_revenue,
+  SUM(creator_share) as creator_revenue
+FROM payment_transactions
+WHERE status = 'confirmed'
+GROUP BY space_type, space_id, space_owner;
+```
+
+### 🎯 **Use Cases**
+
+1. **Conference/Presentation**: Admin buys main stage mic, passes to speakers
+2. **Q&A Session**: Audience buys tickets, gets access to Q&A microphone queue
+3. **Community Meeting**: Moderators control discussion flow with mic passing
+4. **VIP Events**: Premium ticket holders get priority microphone access
+5. **Content Creator Monetization**: Creators earn revenue from mic purchases and Q&A tickets
+
+### 🔐 **Security Considerations**
+
+- **Payment Verification**: All transactions require external confirmation
+- **Permission Validation**: Multiple layers of access control
+- **Usage Monitoring**: Track microphone usage for billing and abuse prevention
+- **Anti-Spam**: Time limits and usage quotas prevent microphone abuse
+- **Profit Sharing**: Transparent revenue distribution to content creators
+
+This system creates a new paradigm for VR social interaction and content monetization, allowing creators to directly monetize their spaces while providing users with premium interactive experiences.
+
 ---
 
 **The enhanced presence infrastructure provides everything needed for a complete VR social platform while maintaining seamless integration with the existing DLUX ecosystem.** 

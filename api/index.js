@@ -5,6 +5,7 @@ const socketIo = require('socket.io');
 const { Pool } = require('pg');
 const Redis = require('redis');
 const crypto = require('crypto');
+const fetch = require('node-fetch');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,16 +17,7 @@ const io = socketIo(server, {
   }
 });
 
-// Database connections
-const primaryPool = new Pool({
-  host: process.env.DB_PRIMARY_HOST || 'data.dlux.io',
-  port: process.env.DB_PRIMARY_PORT || 5432,
-  database: process.env.DB_PRIMARY_NAME || 'postgres',
-  user: process.env.DB_PRIMARY_USER,
-  password: process.env.DB_PRIMARY_PASSWORD,
-  ssl: false // Disable SSL for data.dlux.io as it doesn't support SSL connections
-});
-
+// Database connections (READ-ONLY replica)
 const replicaPool = new Pool({
   host: process.env.DB_REPLICA_HOST || 'db_replica',
   port: process.env.DB_REPLICA_PORT || 5432,
@@ -58,6 +50,9 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Configuration for data.dlux.io API
+const DATA_API_URL = process.env.DATA_API_URL || 'https://data.dlux.io';
+
 // Authentication middleware
 const authenticateOptional = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -74,34 +69,26 @@ const authenticateOptional = async (req, res, next) => {
 };
 
 // ==================================================================
-// CORE API ENDPOINTS
+// CORE API ENDPOINTS (READ-ONLY)
 // ==================================================================
 
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    service: 'dlux-presence-enhanced',
+    service: 'dlux-presence-read-replica',
     timestamp: new Date().toISOString(),
-    version: '2.0.0'
+    version: '2.1.0'
   });
 });
 
-// Database and Redis connection test endpoint
+// Database connection test endpoint (read-only)
 app.get('/api/test-connections', async (req, res) => {
   const results = {
     timestamp: new Date().toISOString(),
-    primary_db: { status: 'error', error: 'Not tested' },
     replica_db: { status: 'error', error: 'Not tested' },
-    redis: { status: 'error', error: 'Not tested' }
+    redis: { status: 'error', error: 'Not tested' },
+    data_api: { status: 'error', error: 'Not tested' }
   };
-
-  // Test Primary Database
-  try {
-    await primaryPool.query('SELECT 1');
-    results.primary_db = { status: 'connected', timestamp: new Date().toISOString() };
-  } catch (error) {
-    results.primary_db = { status: 'error', error: error.message };
-  }
 
   // Test Replica Database
   try {
@@ -119,9 +106,21 @@ app.get('/api/test-connections', async (req, res) => {
     results.redis = { status: 'error', error: error.message };
   }
 
-  const allConnected = results.primary_db.status === 'connected' && 
-                       results.replica_db.status === 'connected' && 
-                       results.redis.status === 'connected';
+  // Test Data API
+  try {
+    const response = await fetch(`${DATA_API_URL}/api/presence/health`);
+    if (response.ok) {
+      results.data_api = { status: 'connected', timestamp: new Date().toISOString() };
+    } else {
+      results.data_api = { status: 'error', error: `HTTP ${response.status}` };
+    }
+  } catch (error) {
+    results.data_api = { status: 'error', error: error.message };
+  }
+
+  const allConnected = results.replica_db.status === 'connected' && 
+                       results.redis.status === 'connected' &&
+                       results.data_api.status === 'connected';
 
   res.status(allConnected ? 200 : 500).json(results);
 });
@@ -159,10 +158,10 @@ app.get('/test-turn', (req, res) => {
 });
 
 // ==================================================================
-// VR SPACE MANAGEMENT
+// VR SPACE MANAGEMENT (READ-ONLY)
 // ==================================================================
 
-// Get available VR spaces (autonomous - no data.dlux.io dependency)
+// Get available VR spaces (read from replica)
 app.get('/api/spaces', authenticateOptional, async (req, res) => {
   try {
     const { limit = 20, offset = 0, type = null } = req.query;
@@ -195,27 +194,32 @@ app.get('/api/spaces', authenticateOptional, async (req, res) => {
     const postsResult = await replicaPool.query(query, params);
     const spaces = [...postsResult.rows];
     
-    // Add collaboration documents
-    const docsQuery = `
-      SELECT 'document' as space_type,
-             id::text as space_id,
-             title as display_name,
-             'Collaborative Document' as description,
-             'document' as type,
-             0 as votes,
-             0 as rating,
-             created_at
-      FROM collaboration_documents
-      WHERE is_public = true ${userAccount ? 'OR creator = $3' : ''}
-      ORDER BY updated_at DESC
-      LIMIT $1 OFFSET $2
-    `;
-    
-    const docParams = [limit, offset];
-    if (userAccount) docParams.push(userAccount);
-    
-    const docsResult = await replicaPool.query(docsQuery, docParams);
-    spaces.push(...docsResult.rows);
+    // Add collaboration documents if table exists
+    try {
+      const docsQuery = `
+        SELECT 'document' as space_type,
+               id::text as space_id,
+               title as display_name,
+               'Collaborative Document' as description,
+               'document' as type,
+               0 as votes,
+               0 as rating,
+               created_at
+        FROM collaboration_documents
+        WHERE is_public = true ${userAccount ? 'OR creator = $3' : ''}
+        ORDER BY updated_at DESC
+        LIMIT $1 OFFSET $2
+      `;
+      
+      const docParams = [limit, offset];
+      if (userAccount) docParams.push(userAccount);
+      
+      const docsResult = await replicaPool.query(docsQuery, docParams);
+      spaces.push(...docsResult.rows);
+    } catch (error) {
+      // Table might not exist in replica - skip
+      console.log('Collaboration documents table not available in replica');
+    }
     
     // Add global lobby
     spaces.unshift({
@@ -231,14 +235,18 @@ app.get('/api/spaces', authenticateOptional, async (req, res) => {
     
     // Get active user counts for each space
     for (const space of spaces) {
-      const activeQuery = `
-        SELECT COUNT(*) as count
-        FROM presence_sessions 
-        WHERE space_type = $1 AND space_id = $2 
-          AND last_activity > NOW() - INTERVAL '5 minutes'
-      `;
-      const activeResult = await replicaPool.query(activeQuery, [space.space_type, space.space_id]);
-      space.active_users = parseInt(activeResult.rows[0].count) || 0;
+      try {
+        const activeQuery = `
+          SELECT COUNT(*) as count
+          FROM presence_sessions 
+          WHERE space_type = $1 AND space_id = $2 
+            AND last_activity > NOW() - INTERVAL '5 minutes'
+        `;
+        const activeResult = await replicaPool.query(activeQuery, [space.space_type, space.space_id]);
+        space.active_users = parseInt(activeResult.rows[0].count) || 0;
+      } catch (error) {
+        space.active_users = 0; // Table might not exist in replica
+      }
     }
     
     res.json({
@@ -253,7 +261,7 @@ app.get('/api/spaces', authenticateOptional, async (req, res) => {
   }
 });
 
-// Get space details (autonomous)
+// Get space details (read from replica)
 app.get('/api/spaces/:spaceType/:spaceId', authenticateOptional, async (req, res) => {
   try {
     const { spaceType, spaceId } = req.params;
@@ -276,18 +284,23 @@ app.get('/api/spaces/:spaceType/:spaceId', authenticateOptional, async (req, res
       hasAccess = !!spaceData; // Public access for posts
       
     } else if (spaceType === 'document') {
-      const query = `
-        SELECT d.*, 
-               CASE WHEN d.is_public = true OR d.creator = $2 THEN true
-                    WHEN p.permission IS NOT NULL THEN true
-                    ELSE false END as has_access
-        FROM collaboration_documents d
-        LEFT JOIN collaboration_permissions p ON d.id = p.document_id AND p.user_account = $2
-        WHERE d.id = $1
-      `;
-      const result = await replicaPool.query(query, [spaceId, userAccount]);
-      spaceData = result.rows[0];
-      hasAccess = spaceData?.has_access || false;
+      try {
+        const query = `
+          SELECT d.*, 
+                 CASE WHEN d.is_public = true OR d.creator = $2 THEN true
+                      WHEN p.permission IS NOT NULL THEN true
+                      ELSE false END as has_access
+          FROM collaboration_documents d
+          LEFT JOIN collaboration_permissions p ON d.id = p.document_id AND p.user_account = $2
+          WHERE d.id = $1
+        `;
+        const result = await replicaPool.query(query, [spaceId, userAccount]);
+        spaceData = result.rows[0];
+        hasAccess = spaceData?.has_access || false;
+      } catch (error) {
+        console.log('Document tables not available in replica');
+        hasAccess = false;
+      }
       
     } else if (spaceType === 'global' && spaceId === 'lobby') {
       spaceData = {
@@ -304,40 +317,53 @@ app.get('/api/spaces/:spaceType/:spaceId', authenticateOptional, async (req, res
       return res.status(404).json({ error: 'Space not found or access denied' });
     }
     
-    // Get active users
-    const sessionsQuery = `
-      SELECT COUNT(*) as active_users,
-             JSON_AGG(
-               JSON_BUILD_OBJECT(
-                 'socket_id', socket_id,
-                 'user_account', user_account,
-                 'connected_at', connected_at,
-                 'position', position,
-                 'voice_enabled', voice_enabled
-               )
-             ) FILTER (WHERE socket_id IS NOT NULL) as users
-      FROM presence_sessions 
-      WHERE space_type = $1 AND space_id = $2 
-        AND last_activity > NOW() - INTERVAL '5 minutes'
-    `;
+    // Get active users (if table exists)
+    let sessionData = { active_users: 0, users: [] };
+    try {
+      const sessionsQuery = `
+        SELECT COUNT(*) as active_users,
+               JSON_AGG(
+                 JSON_BUILD_OBJECT(
+                   'socket_id', socket_id,
+                   'user_account', user_account,
+                   'connected_at', connected_at,
+                   'position', position,
+                   'voice_enabled', voice_enabled
+                 )
+               ) FILTER (WHERE socket_id IS NOT NULL) as users
+        FROM presence_sessions 
+        WHERE space_type = $1 AND space_id = $2 
+          AND last_activity > NOW() - INTERVAL '5 minutes'
+      `;
+      
+      const sessionsResult = await replicaPool.query(sessionsQuery, [spaceType, spaceId]);
+      sessionData = sessionsResult.rows[0];
+    } catch (error) {
+      console.log('Presence sessions table not available in replica');
+    }
     
-    const sessionsResult = await replicaPool.query(sessionsQuery, [spaceType, spaceId]);
-    const sessionData = sessionsResult.rows[0];
-    
-    // Get space settings
-    const settingsQuery = `
-      SELECT settings, chat_enabled, voice_enabled, max_users
-      FROM presence_space_settings
-      WHERE space_type = $1 AND space_id = $2
-    `;
-    
-    const settingsResult = await replicaPool.query(settingsQuery, [spaceType, spaceId]);
-    const settings = settingsResult.rows[0] || {
+    // Get space settings (if table exists)
+    let settings = {
       settings: {},
       chat_enabled: true,
       voice_enabled: true,
       max_users: 50
     };
+    
+    try {
+      const settingsQuery = `
+        SELECT settings, chat_enabled, voice_enabled, max_users
+        FROM presence_space_settings
+        WHERE space_type = $1 AND space_id = $2
+      `;
+      
+      const settingsResult = await replicaPool.query(settingsQuery, [spaceType, spaceId]);
+      if (settingsResult.rows.length > 0) {
+        settings = settingsResult.rows[0];
+      }
+    } catch (error) {
+      console.log('Space settings table not available in replica');
+    }
     
     res.json({
       space: {
@@ -358,7 +384,7 @@ app.get('/api/spaces/:spaceType/:spaceId', authenticateOptional, async (req, res
   }
 });
 
-// Join VR space (autonomous authorization)
+// Join VR space (simplified - just check access, no writes)
 app.post('/api/spaces/:spaceType/:spaceId/join', authenticateOptional, async (req, res) => {
   try {
     const { spaceType, spaceId } = req.params;
@@ -400,45 +426,41 @@ app.post('/api/spaces/:spaceType/:spaceId/join', authenticateOptional, async (re
 });
 
 // ==================================================================
-// CHAT AND MESSAGING API
+// CHAT AND MESSAGING API (READ-ONLY)
 // ==================================================================
 
-// Get chat messages for a space
+// Get chat messages for a space (read from replica)
 app.get('/api/chat/:spaceType/:spaceId/messages', authenticateOptional, async (req, res) => {
   try {
     const { spaceType, spaceId } = req.params;
     const { limit = 50, offset = 0, subspace = 'main' } = req.query;
     
-    const query = `
-      SELECT m.*, 
-             COALESCE(u.display_name, m.user_account) as display_name,
-             r.reactions
-      FROM chat_messages m
-      LEFT JOIN users u ON m.user_account = u.account
-      LEFT JOIN (
-        SELECT message_id, JSON_AGG(
-          JSON_BUILD_OBJECT('reaction', reaction, 'count', count)
-        ) as reactions
-        FROM (
-          SELECT message_id, reaction, COUNT(*) as count
-          FROM message_reactions
-          GROUP BY message_id, reaction
-        ) grouped_reactions
-        GROUP BY message_id
-      ) r ON m.id = r.message_id
-      WHERE m.space_type = $1 AND m.space_id = $2 AND m.subspace = $3
-        AND NOT m.is_deleted
-      ORDER BY m.created_at DESC
-      LIMIT $4 OFFSET $5
-    `;
-    
-    const result = await replicaPool.query(query, [spaceType, spaceId, subspace, limit, offset]);
-    
-    res.json({
-      messages: result.rows.reverse(), // Reverse to get chronological order
-      has_more: result.rows.length === parseInt(limit),
-      node: 'presence.dlux.io'
-    });
+    try {
+      const query = `
+        SELECT m.*, 
+               COALESCE(m.user_account, 'Guest-' || m.guest_id) as display_name
+        FROM chat_messages m
+        WHERE m.space_type = $1 AND m.space_id = $2 AND m.subspace = $3
+          AND NOT m.is_deleted
+        ORDER BY m.created_at DESC
+        LIMIT $4 OFFSET $5
+      `;
+      
+      const result = await replicaPool.query(query, [spaceType, spaceId, subspace, limit, offset]);
+      
+      res.json({
+        messages: result.rows.reverse(), // Reverse to get chronological order
+        has_more: result.rows.length === parseInt(limit),
+        node: 'presence.dlux.io'
+      });
+    } catch (error) {
+      console.log('Chat messages table not available in replica');
+      res.json({
+        messages: [],
+        has_more: false,
+        node: 'presence.dlux.io'
+      });
+    }
     
   } catch (error) {
     console.error('Error getting chat messages:', error);
@@ -446,30 +468,44 @@ app.get('/api/chat/:spaceType/:spaceId/messages', authenticateOptional, async (r
   }
 });
 
-// Send chat message
-app.post('/api/chat/:spaceType/:spaceId/messages', authenticateOptional, async (req, res) => {
-  try {
-    const { spaceType, spaceId } = req.params;
-    const { content, subspace = 'main', message_type = 'text', parent_message_id = null } = req.body;
-    const userAccount = req.user?.account || null;
-    const guestId = userAccount ? null : generateGuestId(req);
+  // Send chat message (proxy to data API)
+  app.post('/api/chat/:spaceType/:spaceId/messages', authenticateOptional, async (req, res) => {
+    try {
+      const { spaceType, spaceId } = req.params;
+      const { content, subspace = 'main', message_type = 'text', parent_message_id = null } = req.body;
+      const userAccount = req.user?.account || null;
+      const guestId = userAccount ? null : generateGuestId(req);
     
     if (!content || content.length > 2000) {
       return res.status(400).json({ error: 'Invalid message content' });
     }
     
-    const query = `
-      INSERT INTO chat_messages 
-      (space_type, space_id, subspace, user_account, guest_id, message_type, content, parent_message_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING *
-    `;
+    // Make API call to data.dlux.io
+    const response = await fetch(`${DATA_API_URL}/api/presence/chat/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': req.get('User-Agent') || 'presence-api',
+        'X-Forwarded-For': req.ip
+      },
+      body: JSON.stringify({
+        space_type: spaceType,
+        space_id: spaceId,
+        subspace,
+        user_account: userAccount,
+        guest_id: guestId,
+        message_type,
+        content,
+        parent_message_id
+      })
+    });
     
-    const result = await replicaPool.query(query, [
-      spaceType, spaceId, subspace, userAccount, guestId, message_type, content, parent_message_id
-    ]);
+    if (!response.ok) {
+      throw new Error(`Data API error: ${response.status}`);
+    }
     
-    const message = result.rows[0];
+    const result = await response.json();
+    const message = result.message;
     
     // Broadcast to connected users
     const roomName = `${spaceType}:${spaceId}:${subspace}`;
@@ -486,84 +522,6 @@ app.post('/api/chat/:spaceType/:spaceId/messages', authenticateOptional, async (
   } catch (error) {
     console.error('Error sending message:', error);
     res.status(500).json({ error: 'Failed to send message' });
-  }
-});
-
-// ==================================================================
-// DOCUMENT COLLABORATION API
-// ==================================================================
-
-// Get document comments
-app.get('/api/documents/:documentId/comments', authenticateOptional, async (req, res) => {
-  try {
-    const { documentId } = req.params;
-    const { limit = 100, offset = 0 } = req.query;
-    
-    const query = `
-      SELECT c.*, 
-             COALESCE(u.display_name, c.user_account) as display_name
-      FROM document_comments c
-      LEFT JOIN users u ON c.user_account = u.account
-      WHERE c.document_id = $1 AND NOT c.is_deleted
-      ORDER BY c.created_at ASC
-      LIMIT $2 OFFSET $3
-    `;
-    
-    const result = await replicaPool.query(query, [documentId, limit, offset]);
-    
-    res.json({
-      comments: result.rows,
-      node: 'presence.dlux.io'
-    });
-    
-  } catch (error) {
-    console.error('Error getting document comments:', error);
-    res.status(500).json({ error: 'Failed to get comments' });
-  }
-});
-
-// Add document comment
-app.post('/api/documents/:documentId/comments', authenticateOptional, async (req, res) => {
-  try {
-    const { documentId } = req.params;
-    const { 
-      content, 
-      comment_type = 'comment', 
-      document_section = null,
-      position_data = null,
-      parent_comment_id = null 
-    } = req.body;
-    const userAccount = req.user?.account || null;
-    
-    if (!userAccount) {
-      return res.status(401).json({ error: 'Authentication required for comments' });
-    }
-    
-    const query = `
-      INSERT INTO document_comments 
-      (document_id, user_account, content, comment_type, document_section, position_data, parent_comment_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING *
-    `;
-    
-    const result = await replicaPool.query(query, [
-      documentId, userAccount, content, comment_type, document_section, 
-      position_data ? JSON.stringify(position_data) : null, parent_comment_id
-    ]);
-    
-    const comment = result.rows[0];
-    
-    // Broadcast to document collaborators
-    io.to(`document:${documentId}`).emit('document-comment', comment);
-    
-    res.json({
-      comment,
-      node: 'presence.dlux.io'
-    });
-    
-  } catch (error) {
-    console.error('Error adding comment:', error);
-    res.status(500).json({ error: 'Failed to add comment' });
   }
 });
 
@@ -609,24 +567,39 @@ io.on('connection', (socket) => {
       // Join Socket.IO room
       socket.join(roomName);
       
-      // Store session in database
+      // Store session in main database via API call
       try {
-        await replicaPool.query(`
-          INSERT INTO presence_sessions 
-          (socket_id, user_account, space_type, space_id, subspace, position, avatar_data, connected_at, last_activity)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-          ON CONFLICT (socket_id) DO UPDATE SET
-            user_account = $2, space_type = $3, space_id = $4, 
-            subspace = $5, position = $6, avatar_data = $7, last_activity = NOW()
-        `, [socket.id, userAccount, spaceType, spaceId, subspace, 
-           position ? JSON.stringify(position) : null,
-           avatar_data ? JSON.stringify(avatar_data) : null]);
+        await fetch(`${DATA_API_URL}/api/presence/sessions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            socket_id: socket.id,
+            user_account: userAccount,
+            space_type: spaceType,
+            space_id: spaceId,
+            subspace,
+            position,
+            avatar_data,
+            voice_enabled: false
+          })
+        });
 
         // Log activity
-        await replicaPool.query(`
-          INSERT INTO space_activity (space_type, space_id, user_account, activity_type, activity_data)
-          VALUES ($1, $2, $3, 'join', $4)
-        `, [spaceType, spaceId, userAccount, JSON.stringify({ subspace, timestamp: Date.now() })]);
+        await fetch(`${DATA_API_URL}/api/presence/activity`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            space_type: spaceType,
+            space_id: spaceId,
+            user_account: userAccount,
+            activity_type: 'join',
+            activity_data: { subspace, timestamp: Date.now() }
+          })
+        });
         
       } catch (dbError) {
         console.error('Database session error:', dbError);
@@ -666,31 +639,43 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Real-time chat messaging
+  // Real-time chat messaging (proxy to data API)
   socket.on('chat-message', async (data) => {
     if (currentSession) {
       try {
         const { content, message_type = 'text', parent_message_id = null } = data;
         const userAccount = currentSession.userAccount;
-        const guestId = userAccount ? null : generateGuestId(req);
+        const guestId = userAccount ? null : generateGuestId({ ip: socket.handshake.address });
         
         if (!content || content.length > 2000) {
           socket.emit('chat-error', { error: 'Invalid message content' });
           return;
         }
         
-        // Insert message into database
-        const result = await replicaPool.query(`
-          INSERT INTO chat_messages 
-          (space_type, space_id, subspace, user_account, guest_id, message_type, content, parent_message_id)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          RETURNING *
-        `, [
-          currentSession.spaceType, currentSession.spaceId, currentSession.subspace,
-          userAccount, guestId, message_type, content, parent_message_id
-        ]);
+        // Send to data API
+        const response = await fetch(`${DATA_API_URL}/api/presence/chat/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            space_type: currentSession.spaceType,
+            space_id: currentSession.spaceId,
+            subspace: currentSession.subspace,
+            user_account: userAccount,
+            guest_id: guestId,
+            message_type,
+            content,
+            parent_message_id
+          })
+        });
         
-        const message = result.rows[0];
+        if (!response.ok) {
+          throw new Error(`Data API error: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        const message = result.message;
         
         // Broadcast to all users in space
         io.to(`chat:${currentSession.roomName}`).emit('chat-message', {
@@ -739,13 +724,18 @@ io.on('connection', (socket) => {
   // A-Frame entity synchronization for VR interactions
   socket.on('aframe-update', async (data) => {
     if (currentSession) {
-      // Update activity timestamp and position
+      // Update activity timestamp via API
       try {
-        await replicaPool.query(`
-          UPDATE presence_sessions 
-          SET last_activity = NOW(), position = $2
-          WHERE socket_id = $1
-        `, [socket.id, JSON.stringify(data.position || {})]);
+        await fetch(`${DATA_API_URL}/api/presence/sessions/${socket.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            position: data.position || {},
+            voice_enabled: data.voice_enabled || false
+          })
+        });
       } catch (error) {
         console.error('Error updating position:', error);
       }
@@ -807,9 +797,9 @@ function generateTurnCredentials(username = null) {
 }
 
 function generateGuestId(req) {
-  const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+  const ip = req.ip || req.connection?.remoteAddress || req.handshake?.address || 'unknown';
   const userAgent = req.get?.('User-Agent') || req.headers?.['user-agent'] || '';
-  return crypto.createHash('md5').update(ip + userAgent).digest('hex').slice(0, 8);
+  return crypto.createHash('md5').update(ip + userAgent + Date.now()).digest('hex').slice(0, 8);
 }
 
 async function verifyHiveSignature(signature) {
@@ -821,39 +811,11 @@ async function verifyHiveSignature(signature) {
 async function getUsersInSpace(roomName) {
   try {
     const sockets = await io.in(roomName).fetchSockets();
-    const users = [];
-    
-    for (const socketClient of sockets) {
-      // Get user session data from database
-      try {
-        const result = await replicaPool.query(`
-          SELECT user_account, position, avatar_data, voice_enabled, connected_at
-          FROM presence_sessions
-          WHERE socket_id = $1
-        `, [socketClient.id]);
-        
-        if (result.rows.length > 0) {
-          const session = result.rows[0];
-          users.push({
-            socketId: socketClient.id,
-            userAccount: session.user_account,
-            position: session.position,
-            avatar_data: session.avatar_data,
-            voice_enabled: session.voice_enabled,
-            connected_at: session.connected_at
-          });
-        }
-      } catch (error) {
-        console.error('Error getting user session:', error);
-        // Fallback to basic socket info
-        users.push({
-          socketId: socketClient.id,
-          userAccount: null
-        });
-      }
-    }
-    
-    return users;
+    return sockets.map(socketClient => ({
+      socketId: socketClient.id,
+      userAccount: null, // Would be populated from session data
+      connected_at: new Date()
+    }));
   } catch (error) {
     console.error('Error getting users in space:', error);
     return [];
@@ -862,7 +824,9 @@ async function getUsersInSpace(roomName) {
 
 async function cleanupSession(socketId) {
   try {
-    await replicaPool.query('DELETE FROM presence_sessions WHERE socket_id = $1', [socketId]);
+    await fetch(`${DATA_API_URL}/api/presence/sessions/${socketId}`, {
+      method: 'DELETE'
+    });
   } catch (error) {
     console.error('Error cleaning up session:', error);
   }
@@ -873,8 +837,8 @@ const PORT = process.env.PORT || 3000;
 let isShuttingDown = false;
 
 server.listen(PORT, () => {
-  console.log(`DLUX Presence Enhanced API running on port ${PORT}`);
-  console.log(`Primary DB: ${process.env.DB_PRIMARY_HOST || 'data.dlux.io'}`);
+  console.log(`DLUX Presence Read-Only API running on port ${PORT}`);
+  console.log(`Data API: ${DATA_API_URL}`);
   console.log(`Replica DB: ${process.env.DB_REPLICA_HOST || 'db_replica'}`);
   console.log(`Redis: ${process.env.REDIS_HOST || 'redis'}`);
 });
@@ -888,7 +852,6 @@ async function gracefulShutdown(signal) {
   isShuttingDown = true;
   console.log(`${signal} received, shutting down gracefully...`);
   
-  // Set a timeout to force exit if shutdown takes too long
   const forceExitTimeout = setTimeout(() => {
     console.error('Forced shutdown after 10 seconds');
     process.exit(1);
@@ -914,13 +877,6 @@ async function gracefulShutdown(signal) {
     });
     
     // Close database connections
-    try {
-      await primaryPool.end();
-      console.log('Primary database connection closed');
-    } catch (error) {
-      console.error('Error closing primary database:', error.message);
-    }
-    
     try {
       await replicaPool.end();
       console.log('Replica database connection closed');
