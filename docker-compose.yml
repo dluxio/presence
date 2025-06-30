@@ -21,8 +21,9 @@ services:
     volumes:
       # Bind your custom conf + persistent database & logs
       - "./turnserver.conf:/etc/coturn/turnserver.conf:ro"
-      - "coturn-data:/var/lib/coturn"
-      - "coturn-logs:/var/log"
+      - "coturn_data:/var/lib/coturn"
+      - "coturn_logs:/var/log"
+
 
   # Caddy reverse proxy with automatic HTTPS
   caddy:
